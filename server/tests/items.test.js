@@ -33,6 +33,47 @@ describe('/api/items', () => {
     expect(res.body.items).toEqual([]);
   });
 
-  test.todo('POST returns 409 when the same title is reported at the same location twice');
-  test.todo('PATCH returns 403 when someone who is not the reporter edits the item');
+  // `async` lets this test wait for each HTTP request before moving on.
+  test('POST returns 409 when the same title is reported at the same location twice', async () => {
+    // Arrange: register one user and keep the JWT needed for authenticated requests.
+    const token = await registerAndGetToken('Alice', 'duplicate@test.com');
+    // These values identify the report whose duplicate should be rejected.
+    const report = { title: 'Danny Phantom', location: 'Amity Park' };
+
+    // Act: send the first report; it creates the item and establishes the duplicate.
+    const firstResponse = await request(app)
+      .post('/api/items') // `post` makes an HTTP POST request to the item collection.
+      .set('Authorization', `Bearer ${token}`) // Send the JWT in the standard auth header.
+      .send({ ...report, status: 'lost', category: 'other' }); // JSON body; spread copies title/location.
+
+    // Assert: the initial report is accepted, so the second request has a real duplicate to match.
+    expect(firstResponse.status).toBe(201);
+
+    // Act: submit the same title and location again with the same user's credentials to create the duplicate response.
+    const duplicateResponse = await request(app)
+      .post('/api/items') //Use the same endpoint to submit the duplicate report.
+      .set('Authorization', `Bearer ${token}`) // Authenticate this request as the same one as before
+      .send({ ...report, status: 'found', category: 'other' }); // Title and location remain the same but the rest are changed
+
+    //We expect cause it's a duplicate that the request status to be 409
+    expect(duplicateResponse.status).toBe(409);
+  });
+
+  // This checks the authorization boundary for edits by a different registered user.
+  test('PATCH returns 403 when someone who is not the reporter edits the item', async () => {
+    // Create two accounts with distinct emails so they receive distinct identities.
+    const reporterToken = await registerAndGetToken('Alice', 'reporter@test.com');
+    const DannyToken = await registerAndGetToken('Bob', 'other-user@test.com');
+    // Create the item under the reporter's identity; the helper returns its saved database record.
+    const item = await createItem(reporterToken);
+
+    // Attempt to change the item's title while authenticating as the other user.
+    const response = await request(app)
+      .patch(`/api/items/${item._id}`) // The item ID selects which existing item receives the update.
+      .set('Authorization', `Bearer ${DannyToken}`) // This JWT belongs to Danny Phantom, the ghost here.
+      .send({ title: 'Inviso-Bill' }); // PATCH sends only the field we want to update.
+
+    // The server rejects a validly authenticated user who does not own the item but tried to butt in and change what isn't his.
+    expect(response.status).toBe(403);
+  });
 });
